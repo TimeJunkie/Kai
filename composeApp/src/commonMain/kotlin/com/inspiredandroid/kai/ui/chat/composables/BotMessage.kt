@@ -31,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +40,6 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.inspiredandroid.kai.getBackgroundDispatcher
 import com.inspiredandroid.kai.ui.dynamicui.FrozenSubmission
 import com.inspiredandroid.kai.ui.dynamicui.toSpeakableText
 import com.inspiredandroid.kai.ui.handCursor
@@ -62,17 +60,13 @@ import kai.composeapp.generated.resources.ic_volume_up
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
-import kotlinx.coroutines.launch
-import nl.marc_apps.tts.TextToSpeechInstance
-import nl.marc_apps.tts.errors.TextToSpeechSynthesisInterruptedError
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
 internal fun BotMessage(
     message: String,
-    textToSpeech: TextToSpeechInstance?,
+    onSpeakClick: (() -> Unit)?,
     isSpeaking: Boolean,
-    setIsSpeaking: (Boolean) -> Unit,
     onRegenerate: (() -> Unit)? = null,
     isInteractive: Boolean = false,
     onUiCallback: ((event: String, data: Map<String, String>) -> Unit)? = null,
@@ -144,29 +138,11 @@ internal fun BotMessage(
     }
     if (message.isEmpty()) return
     Row(Modifier.padding(horizontal = 8.dp)) {
-        if (textToSpeech != null) {
-            val componentScope = rememberCoroutineScope()
+        if (onSpeakClick != null) {
             SmallIconButton(
                 iconResource = if (isSpeaking) Res.drawable.ic_stop else Res.drawable.ic_volume_up,
                 contentDescription = stringResource(Res.string.bot_message_speech_content_description),
-                onClick = {
-                    componentScope.launch(getBackgroundDispatcher()) {
-                        textToSpeech.stop()
-                        if (isSpeaking) {
-                            setIsSpeaking(false)
-                        } else {
-                            setIsSpeaking(true)
-                            try {
-                                textToSpeech.say(text = message.toSpeakableText())
-                            } catch (ignore: TextToSpeechSynthesisInterruptedError) {
-                                // Expected interruption - no action needed
-                            } catch (e: Exception) {
-                                // Handle TTS errors gracefully (service failure, audio issues, etc.)
-                            }
-                            setIsSpeaking(false)
-                        }
-                    }
-                },
+                onClick = onSpeakClick,
             )
         }
         val clipboardManager = LocalClipboardManager.current

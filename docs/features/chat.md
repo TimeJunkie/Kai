@@ -1,6 +1,6 @@
 # Chat & Conversations
 
-**Last verified:** 2026-05-28
+**Last verified:** 2026-06-25
 
 Kai's chat system manages the message history, conversation persistence, file attachments, and speech output. Conversations are service-independent — switching providers does not affect which conversation is loaded or restored. Multiple conversations are persisted and browsable via a history sheet.
 
@@ -98,6 +98,9 @@ Multiple files can be attached to a single prompt. Each file is added one at a t
 - Toggle in the top bar enables auto-play of new assistant messages
 - Per-message play button on assistant messages
 - Markdown is stripped before speaking
+- Long messages are split into smaller chunks and spoken sequentially (in order), so playback starts sooner and slow or self-hosted TTS backends are less likely to time out on a single long request
+- Starting playback on one message (or auto-play firing for a new one) cancels any speech already in progress, regardless of which message started it
+- On Android, playback uses the device's system-default TTS engine (whatever the user has configured in Android settings) rather than a fixed engine, so custom or third-party TTS engines are respected
 
 ## Conversation Storage
 
@@ -131,3 +134,6 @@ Multiple files can be attached to a single prompt. Each file is added one at a t
 | `composeApp/src/commonMain/.../ui/chat/composables/HeartbeatBanner.kt` | Dismissable banner for heartbeat notifications |
 | `composeApp/src/commonMain/.../ui/chat/composables/TopBar.kt` | Top bar with new chat, history, TTS, and settings icons |
 | `composeApp/src/commonMain/.../ui/chat/composables/QuestionInput.kt` | Text input with send/stop button |
+| `composeApp/src/commonMain/.../ui/chat/composables/BotMessage.kt` | Per-message speak button and `isSpeaking` state |
+| `composeApp/src/commonMain/.../ui/dynamicui/KaiUiTts.kt` | Markdown-to-speakable-text conversion and chunk-splitting for sequential playback |
+| `androidApp/src/main/kotlin/.../MainActivity.kt` | Selects the system-default TTS engine on Android |

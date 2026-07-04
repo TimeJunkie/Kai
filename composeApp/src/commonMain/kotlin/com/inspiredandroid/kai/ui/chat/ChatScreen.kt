@@ -100,6 +100,7 @@ import com.inspiredandroid.kai.ui.components.LogoAnimation
 import com.inspiredandroid.kai.ui.components.VerticalScrollbarForList
 import com.inspiredandroid.kai.ui.dynamicui.FrozenSubmission
 import com.inspiredandroid.kai.ui.dynamicui.KaiUiRenderer
+import com.inspiredandroid.kai.ui.dynamicui.splitTtsChunks
 import com.inspiredandroid.kai.ui.dynamicui.toSpeakableText
 import com.inspiredandroid.kai.ui.handCursor
 import com.inspiredandroid.kai.ui.markdown.KaiUiBlock
@@ -122,12 +123,18 @@ import kai.composeapp.generated.resources.scroll_to_bottom_content_description
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import nl.marc_apps.tts.TextToSpeechInstance
 import nl.marc_apps.tts.errors.TextToSpeechSynthesisInterruptedError
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
+
+/** Maximum time in milliseconds Kai waits for a single TTS chunk to synthesise. */
+private const val TTS_CHUNK_TIMEOUT_MS = 60_000L
 
 @Composable
 fun ChatScreen(
@@ -620,6 +627,9 @@ private fun ChatModeScreen(
                         } else {
                             val listState = rememberLazyListState()
                             val componentScope = rememberCoroutineScope()
+                            // Stable holder for the active TTS job so it can be cancelled from any
+                            // message's speak button, regardless of lazy-list item scroll state.
+                            val ttsJobHolder = remember { object { var job: Job? = null } }
 
                             LaunchedEffect(uiState.history.size) {
                                 // Capture history at effect start to prevent race conditions
@@ -628,11 +638,18 @@ private fun ChatModeScreen(
                                     listState.scrollToItem(history.lastIndex)
                                     val lastMessage = history.last()
                                     if (uiState.isSpeechOutputEnabled && lastMessage.role == History.Role.ASSISTANT) {
-                                        componentScope.launch(getBackgroundDispatcher()) {
+                                        ttsJobHolder.job?.cancel()
+                                        ttsJobHolder.job = componentScope.launch(getBackgroundDispatcher()) {
                                             textToSpeech?.stop()
                                             uiState.actions.setIsSpeaking(true, lastMessage.id)
                                             try {
-                                                textToSpeech?.say(lastMessage.content.toSpeakableText())
+                                                val chunks = splitTtsChunks(lastMessage.content.toSpeakableText())
+                                                for (chunk in chunks) {
+                                                    ensureActive()
+                                                    withTimeout(TTS_CHUNK_TIMEOUT_MS) {
+                                                        textToSpeech?.say(chunk, clearQueue = false)
+                                                    }
+                                                }
                                             } catch (_: TextToSpeechSynthesisInterruptedError) {
                                                 // Speech was interrupted by user
                                             } catch (_: Exception) {
@@ -782,11 +799,37 @@ private fun ChatModeScreen(
                                                     val pairedUserId = userIdByAssistantId[history.id]
                                                     BotMessage(
                                                         message = history.content,
-                                                        textToSpeech = textToSpeech,
+                                                        onSpeakClick = if (textToSpeech != null) {
+                                                            val msgId = history.id
+                                                            val msgContent = history.content
+                                                            {
+                                                                ttsJobHolder.job?.cancel()
+                                                                if (uiState.isSpeaking && uiState.isSpeakingContentId == msgId) {
+                                                                    ttsJobHolder.job = componentScope.launch(getBackgroundDispatcher()) {
+                                                                        textToSpeech.stop()
+                                                                    }
+                                                                    uiState.actions.setIsSpeaking(false, msgId)
+                                                                } else {
+                                                                    uiState.actions.setIsSpeaking(true, msgId)
+                                                                    ttsJobHolder.job = componentScope.launch(getBackgroundDispatcher()) {
+                                                                        textToSpeech.stop()
+                                                                        try {
+                                                                            val chunks = splitTtsChunks(msgContent.toSpeakableText())
+                                                                            for (chunk in chunks) {
+                                                                                ensureActive()
+                                                                                withTimeout(TTS_CHUNK_TIMEOUT_MS) {
+                                                                                    textToSpeech.say(chunk, clearQueue = false)
+                                                                                }
+                                                                            }
+                                                                        } catch (_: TextToSpeechSynthesisInterruptedError) {
+                                                                        } catch (_: Exception) {
+                                                                        }
+                                                                        uiState.actions.setIsSpeaking(false, msgId)
+                                                                    }
+                                                                }
+                                                            }
+                                                        } else null,
                                                         isSpeaking = uiState.isSpeaking && uiState.isSpeakingContentId == history.id,
-                                                        setIsSpeaking = {
-                                                            uiState.actions.setIsSpeaking(it, history.id)
-                                                        },
                                                         onRegenerate = if (isLastAssistant) uiState.actions.regenerate else null,
                                                         isInteractive = isLastAssistant && !uiState.isLoading && frozen == null,
                                                         onUiCallback = { event, data ->
@@ -817,9 +860,8 @@ private fun ChatModeScreen(
                                                     // every earlier thinking segment in this cycle under this id.
                                                     BotMessage(
                                                         message = "",
-                                                        textToSpeech = null,
+                                                        onSpeakClick = null,
                                                         isSpeaking = false,
-                                                        setIsSpeaking = {},
                                                         reasoningSegments = reasoningSegmentsByAssistantId[history.id]
                                                             ?: persistentListOf(history.content),
                                                     )

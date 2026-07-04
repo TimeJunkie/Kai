@@ -11,6 +11,63 @@ import com.inspiredandroid.kai.ui.markdown.toSpeakableText
  */
 fun String.toSpeakableText(): String = parseMarkdown(this).toSpeakableText()
 
+/**
+ * Target character count per TTS chunk. Smaller chunks start playing sooner (less
+ * latency to first audio) and are less likely to hit per-request server timeouts.
+ * 300 chars ≈ 2–3 sentences, fast enough for voice-cloning servers.
+ */
+private const val TTS_DEFAULT_CHUNK_CHARS = 300
+
+/**
+ * Splits TTS-ready [text] into chunks for sequential synthesis.
+ * Split boundaries are chosen in preference order:
+ *   paragraph break > sentence end (. ! ?) > clause boundary (, ; :) > word boundary
+ * Each chunk is at most [maxChars] characters.  Guarantees non-empty, trimmed strings.
+ *
+ * Since each chunk is sent via a sequential `say()` call (which suspends until the
+ * previous chunk finishes), playback is always in order — no out-of-order risk.
+ */
+fun splitTtsChunks(text: String, maxChars: Int = TTS_DEFAULT_CHUNK_CHARS): List<String> {
+    if (text.length <= maxChars) return listOf(text).filter { it.isNotBlank() }
+    val result = mutableListOf<String>()
+    var remaining = text.trim()
+    while (remaining.length > maxChars) {
+        val window = remaining.take(maxChars)
+        val split = findTtsSplitPoint(window, maxChars)
+        result += remaining.take(split).trim()
+        remaining = remaining.drop(split).trimStart()
+    }
+    if (remaining.isNotBlank()) result += remaining
+    return result.filter { it.isNotBlank() }
+}
+
+/**
+ * Returns the index within [window] at which to split, favouring natural language
+ * boundaries in the latter two-thirds of the window. Falls back to [maxChars]
+ * (hard split) if no boundary is found.
+ */
+private fun findTtsSplitPoint(window: String, maxChars: Int): Int {
+    val minSplit = maxChars / 3
+
+    // Paragraph break (\n\n)
+    window.lastIndexOf("\n\n").takeIf { it > minSplit }?.let { return it + 2 }
+
+    // Sentence endings followed by space or newline
+    for (punct in arrayOf(". ", "! ", "? ", ".\n", "!\n", "?\n")) {
+        window.lastIndexOf(punct).takeIf { it > minSplit }?.let { return it + 1 }
+    }
+
+    // Clause boundaries
+    for (punct in arrayOf(", ", "; ", ": ")) {
+        window.lastIndexOf(punct).takeIf { it > minSplit }?.let { return it + 1 }
+    }
+
+    // Word boundary
+    window.lastIndexOf(' ').takeIf { it > minSplit }?.let { return it }
+
+    return maxChars // hard split as last resort
+}
+
 internal fun KaiUiNode.collectSpeakableText(): String {
     val parts = mutableListOf<String>()
     walk(parts)
